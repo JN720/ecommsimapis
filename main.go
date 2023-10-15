@@ -9,6 +9,7 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
+	_ "golang.org/x/crypto/bcrypt"
 )
 
 func main() {

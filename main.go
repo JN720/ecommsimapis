@@ -5,18 +5,28 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/cognitoidentityprovider"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
-	_ "golang.org/x/crypto/bcrypt"
 )
 
 func main() {
 	err := godotenv.Load(".env")
+
 	if err != nil {
 		panic("environmental variable file not found")
 	}
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String("us-west-1"),
+	})
+	if err != nil {
+		panic("aws connection failed")
+	}
+	cognito := cognitoidentityprovider.New(sess)
 	opt, err := redis.ParseURL(os.Getenv("REDIS_URL"))
 	if err != nil {
 		panic("redis connection failed")

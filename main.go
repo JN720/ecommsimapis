@@ -30,6 +30,7 @@ func main() {
 	app := gin.Default()
 	app.GET("/", func(c *gin.Context) { indexGet(c, db, rdb) })
 	app.GET("/users/:id", func(c *gin.Context) { userGet(c, db, rdb) })
+	app.PATCH("/users/:id", func(c *gin.Context) { userPatch(c, db, rdb) })
 	app.POST("/products", func(c *gin.Context) { productPost(c, db, rdb) })
 	app.Run("localhost:8000")
 }
@@ -49,12 +50,34 @@ func userGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		Name    string `json:"name"`
 		Address string `json:"address"`
 	}
-	err := db.QueryRow("SELECT email, COALESCE(name, '') AS name, COALESCE(address, '') AS address FROM Users WHERE id = "+id+";").Scan(&user.Email, &user.Name, &user.Address)
+	err := db.QueryRow("SELECT email, COALESCE(name, '') AS name, COALESCE(address, '') AS address FROM Users WHERE id = "+
+		id+";").Scan(&user.Email, &user.Name, &user.Address)
 	if err != nil {
 		c.Status(http.StatusNotFound)
 		return
 	}
 	c.IndentedJSON(http.StatusOK, user)
+}
+
+func userPatch(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	var user struct {
+		Name    string `json:"name"`
+		Address string `json:"address"`
+	}
+	id, hasId := c.Params.Get("id")
+	if !hasId {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	if err := c.ShouldBindJSON(&user); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	if _, err := db.Query("UPDATE Users SET name = '" + user.Name + "', address = '" + user.Address + "' WHERE id = " + id + ";"); err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	c.Status(http.StatusOK)
 }
 
 func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
@@ -65,7 +88,6 @@ func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		Quantity    string `json:"quantity"`
 		Price       string `json:"price"`
 	}
-
 	if err := c.ShouldBindJSON(&product); err != nil {
 		c.Status(http.StatusBadRequest)
 		return

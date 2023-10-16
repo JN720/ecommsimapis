@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
 	"net/http"
 	"os"
 
@@ -50,7 +49,6 @@ func userGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 	}
 	err := db.QueryRow("SELECT email, COALESCE(name, '') AS name, COALESCE(address, '') AS address FROM Users WHERE id = "+id+";").Scan(&user.Email, &user.Name, &user.Address)
 	if err != nil {
-		fmt.Println(err)
 		c.Status(http.StatusNotFound)
 		return
 	}

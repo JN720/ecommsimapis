@@ -85,6 +85,7 @@ func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		Card        string `json:"card"`
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		Department  string `json:"department"`
 		Quantity    string `json:"quantity"`
 		Price       string `json:"price"`
 	}
@@ -98,8 +99,8 @@ func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	_, err := db.Query("INSERT INTO Products(card_id, name, description, quantity, price, status, created) VALUES(" +
-		product.Card + ",'" + product.Name + "', '" + product.Description + "', " + product.Quantity + ", " + product.Price + ", 'A', NOW());")
+	_, err := db.Query("INSERT INTO Products(card_id, name, description, department, quantity, price, status, created) VALUES(" +
+		product.Card + ",'" + product.Name + "', '" + product.Description + "', '" + product.Department + "', " + product.Quantity + ", " + product.Price + ", 'A', NOW());")
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return

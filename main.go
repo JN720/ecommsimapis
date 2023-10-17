@@ -41,7 +41,10 @@ func main() {
 	app.GET("/products/:id", func(c *gin.Context) { productGet(c, db, rdb) })
 	//should have auth
 	app.POST("/products", func(c *gin.Context) { productPost(c, db, rdb) })
-	app.Run("localhost:8000")
+	port := os.Getenv("PORT")
+	if err := app.Run("localhost:" + port); err != nil {
+		app.Run("localhost:8000")
+	}
 }
 
 func indexGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {

@@ -29,9 +29,15 @@ func main() {
 	}
 	app := gin.Default()
 	app.GET("/", func(c *gin.Context) { indexGet(c, db, rdb) })
+	//should have auth
 	app.GET("/users/:id", func(c *gin.Context) { userGet(c, db, rdb) })
+	//should have auth
 	app.PATCH("/users/:id", func(c *gin.Context) { userPatch(c, db, rdb) })
+	//should have auth
+	app.GET("/cards/:id", func(c *gin.Context) { cardGet(c, db, rdb) })
+	//should have auth + auto generated card id's
 	app.POST("/cards", func(c *gin.Context) { cardPost(c, db, rdb) })
+	//should have auth
 	app.POST("/products", func(c *gin.Context) { productPost(c, db, rdb) })
 	app.Run("localhost:8000")
 }
@@ -79,6 +85,39 @@ func userPatch(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		return
 	}
 	c.Status(http.StatusOK)
+}
+
+func cardGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	var cards []struct {
+		Number  string `json:"number"`
+		Balance string `json:"balance"`
+	}
+
+	id, hasId := c.Params.Get("id")
+	if !hasId {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	rows, err := db.Query("SELECT Cards.number AS number, Cards.balance AS balance FROM Users JOIN Cards" +
+		" ON Users.id = Cards.user_id WHERE Users.id = " + id + " GROUP BY Cards.number, Cards.balance;")
+
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	for rows.Next() {
+		var card struct {
+			Number  string `json:"number"`
+			Balance string `json:"balance"`
+		}
+		if err := rows.Scan(&card.Number, &card.Balance); err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		cards = append(cards, card)
+	}
+	c.IndentedJSON(http.StatusOK, gin.H{"cards": cards})
 }
 
 func cardPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {

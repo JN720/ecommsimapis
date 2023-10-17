@@ -31,6 +31,7 @@ func main() {
 	app.GET("/", func(c *gin.Context) { indexGet(c, db, rdb) })
 	app.GET("/users/:id", func(c *gin.Context) { userGet(c, db, rdb) })
 	app.PATCH("/users/:id", func(c *gin.Context) { userPatch(c, db, rdb) })
+	app.POST("/cards", func(c *gin.Context) { cardPost(c, db, rdb) })
 	app.POST("/products", func(c *gin.Context) { productPost(c, db, rdb) })
 	app.Run("localhost:8000")
 }
@@ -78,6 +79,29 @@ func userPatch(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		return
 	}
 	c.Status(http.StatusOK)
+}
+
+func cardPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	var card struct {
+		User   string `json:"user"`
+		Number string `json:"number"`
+		Code   string `json:"code"`
+	}
+	if err := c.ShouldBindJSON(&card); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	if len(card.Number) != 12 || len(card.Code) != 4 {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	_, err := db.Query("INSERT INTO Cards(user_id, number, code, balance, created) VALUES(" +
+		card.User + ",'" + card.Number + "', '" + card.Code + "', 0, NOW());")
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	c.Status(http.StatusCreated)
 }
 
 func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {

@@ -37,6 +37,8 @@ func main() {
 	app.GET("/cards/:id", func(c *gin.Context) { cardGet(c, db, rdb) })
 	//should have auth + auto generated card id's
 	app.POST("/cards", func(c *gin.Context) { cardPost(c, db, rdb) })
+	//should have image retrieval
+	app.GET("/products/:id", func(c *gin.Context) { productGet(c, db, rdb) })
 	//should have auth
 	app.POST("/products", func(c *gin.Context) { productPost(c, db, rdb) })
 	app.Run("localhost:8000")
@@ -141,6 +143,28 @@ func cardPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		return
 	}
 	c.Status(http.StatusCreated)
+}
+
+func productGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	var product struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Department  string `json:"department"`
+		Quantity    string `json:"quantity"`
+		Price       string `json:"price"`
+	}
+	id, hasId := c.Params.Get("id")
+	if !hasId {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	err := db.QueryRow("SELECT name, description, department, quantity, price FROM Products WHERE id = "+id+
+		";").Scan(&product.Name, &product.Description, &product.Department, &product.Quantity, &product.Price)
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	c.IndentedJSON(http.StatusOK, gin.H{"product": product})
 }
 
 func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {

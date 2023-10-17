@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"net/http"
 	"os"
 	"strconv"
 
+	firebase "firebase.google.com/go"
+	"firebase.google.com/go/auth"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -13,9 +16,16 @@ import (
 )
 
 func main() {
-	err := godotenv.Load(".env")
-	if err != nil {
+	if err := godotenv.Load(".env"); err != nil {
 		panic("environmental variable file not found")
+	}
+	fb, err := firebase.NewApp(context.Background(), nil)
+	if err != nil {
+		panic("firebase connection failed")
+	}
+	fba, err := fb.Auth(context.Background())
+	if err != nil {
+		panic("firebase auth failed")
 	}
 	opt, err := redis.ParseURL(os.Getenv("REDIS_URL"))
 	if err != nil {
@@ -28,27 +38,46 @@ func main() {
 		panic("postgres connection failed")
 	}
 	app := gin.Default()
+
+	authMW := func(c *gin.Context) {
+		authenticate(c, fba)
+	}
+
+	//api status
 	app.GET("/", func(c *gin.Context) { indexGet(c, db, rdb) })
-	//should have auth
+	//public user info
 	app.GET("/users/:id", func(c *gin.Context) { userGet(c, db, rdb) })
-	//should have auth
-	app.PATCH("/users/:id", func(c *gin.Context) { userPatch(c, db, rdb) })
-	//should have auth
-	app.GET("/cards/:id", func(c *gin.Context) { cardGet(c, db, rdb) })
-	//should have auth + auto generated card id's
-	app.POST("/cards", func(c *gin.Context) { cardPost(c, db, rdb) })
-	//should have image retrieval
+	//user profile
+	app.PATCH("/users/:id", authMW, func(c *gin.Context) { userPatch(c, db, rdb) })
+	//user cards
+	app.GET("/cards/:id", authMW, func(c *gin.Context) { cardGet(c, db, rdb) })
+	//new card: should have auto generated card id's
+	app.POST("/cards", authMW, func(c *gin.Context) { cardPost(c, db, rdb) })
+	//product info: should have image retrieval
 	app.GET("/products/:id", func(c *gin.Context) { productGet(c, db, rdb) })
-	//should have auth
-	app.POST("/products", func(c *gin.Context) { productPost(c, db, rdb) })
+	//product creation
+	app.POST("/products", authMW, func(c *gin.Context) { productPost(c, db, rdb) })
+
 	port := os.Getenv("PORT")
 	if err := app.Run("localhost:" + port); err != nil {
 		app.Run("localhost:8000")
 	}
 }
 
+func authenticate(c *gin.Context, fba *auth.Client) {
+	idToken := c.GetHeader("Authorization")
+	token, err := fba.VerifyIDToken(context.Background(), idToken)
+	if err != nil {
+		c.Status(http.StatusUnauthorized)
+		c.Abort()
+		return
+	}
+	c.Set("token", token)
+	c.Next()
+}
+
 func indexGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
-	c.IndentedJSON(http.StatusOK, gin.H{"message": "hello world"})
+	c.IndentedJSON(http.StatusOK, gin.H{"message": "Functional"})
 }
 
 func userGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {

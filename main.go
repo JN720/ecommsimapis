@@ -85,8 +85,11 @@ func signup(c *gin.Context, fba *auth.Client) {
 		Password string `json:"password" binding:"required"`
 		Name     string `json:"name" binding:"required"`
 		Phone    string `json:"phone"`
+		//Phone string `json:"phone" binding:"e164"`
 	}
-	c.BindJSON(&credentials)
+	if err := c.BindJSON(&credentials); err != nil {
+		return
+	}
 
 	params := (&auth.UserToCreate{}).
 		Email(credentials.Email).
@@ -141,7 +144,9 @@ func userPatch(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	c.BindJSON(&user)
+	if err := c.BindJSON(&user); err != nil {
+		return
+	}
 	if _, err := db.Query("UPDATE Users SET name = '" + user.Name + "', address = '" + user.Address + "' WHERE id = " + id + ";"); err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -188,7 +193,9 @@ func cardPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		Number string `json:"number" binding:"required,len=12"`
 		Code   string `json:"code" binding:"required,len=4"`
 	}
-	c.BindJSON(&card)
+	if err := c.BindJSON(&card); err != nil {
+		return
+	}
 
 	_, err := db.Query("INSERT INTO Cards(user_id, number, code, balance, created) VALUES(" +
 		card.User + ",'" + card.Number + "', '" + card.Code + "', 0, NOW());")

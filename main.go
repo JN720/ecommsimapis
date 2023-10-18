@@ -25,7 +25,7 @@ func main() {
 	}
 	fba, err := fb.Auth(context.Background())
 	if err != nil {
-		panic("firebase auth failed")
+		//panic("firebase auth failed")
 	}
 	opt, err := redis.ParseURL(os.Getenv("REDIS_URL"))
 	if err != nil {
@@ -40,6 +40,8 @@ func main() {
 	app := gin.Default()
 
 	authMW := func(c *gin.Context) {
+		//c.Next()
+		//return
 		authenticate(c, fba)
 	}
 
@@ -57,7 +59,8 @@ func main() {
 	app.GET("/products/:id", func(c *gin.Context) { productGet(c, db, rdb) })
 	//product creation
 	app.POST("/products", authMW, func(c *gin.Context) { productPost(c, db, rdb) })
-
+	//account creation
+	app.POST("/signup", func(c *gin.Context) { signup(c, fba) })
 	port := os.Getenv("PORT")
 	if err := app.Run("localhost:" + port); err != nil {
 		app.Run("localhost:8000")
@@ -74,6 +77,34 @@ func authenticate(c *gin.Context, fba *auth.Client) {
 	}
 	c.Set("token", token)
 	c.Next()
+}
+
+func signup(c *gin.Context, fba *auth.Client) {
+	var credentials struct {
+		Email    string `json:"email" binding:"required,email"`
+		Password string `json:"password" binding:"required"`
+		Name     string `json:"name" binding:"required"`
+		Phone    string `json:"phone"`
+	}
+	c.BindJSON(&credentials)
+
+	params := (&auth.UserToCreate{}).
+		Email(credentials.Email).
+		EmailVerified(false).
+		Password(credentials.Password).
+		DisplayName(credentials.Name).
+		Disabled(false)
+
+	if credentials.Phone != "" {
+		params = params.PhoneNumber(credentials.Phone)
+	}
+
+	u, err := fba.CreateUser(context.Background(), params)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	c.IndentedJSON(http.StatusCreated, gin.H{"user": u})
 }
 
 func indexGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
@@ -102,18 +133,15 @@ func userGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 
 func userPatch(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 	var user struct {
-		Name    string `json:"name"`
-		Address string `json:"address"`
+		Name    string `json:"name" binding:"required"`
+		Address string `json:"address" binding:"required"`
 	}
 	id, hasId := c.Params.Get("id")
 	if !hasId {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	if err := c.ShouldBindJSON(&user); err != nil {
-		c.Status(http.StatusBadRequest)
-		return
-	}
+	c.BindJSON(&user)
 	if _, err := db.Query("UPDATE Users SET name = '" + user.Name + "', address = '" + user.Address + "' WHERE id = " + id + ";"); err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -156,22 +184,16 @@ func cardGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 
 func cardPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 	var card struct {
-		User   string `json:"user"`
-		Number string `json:"number"`
-		Code   string `json:"code"`
+		User   string `json:"user" binding:"required"`
+		Number string `json:"number" binding:"required,len=12"`
+		Code   string `json:"code" binding:"required,len=4"`
 	}
-	if err := c.ShouldBindJSON(&card); err != nil {
-		c.Status(http.StatusBadRequest)
-		return
-	}
-	if len(card.Number) != 12 || len(card.Code) != 4 {
-		c.Status(http.StatusBadRequest)
-		return
-	}
+	c.BindJSON(&card)
+
 	_, err := db.Query("INSERT INTO Cards(user_id, number, code, balance, created) VALUES(" +
 		card.User + ",'" + card.Number + "', '" + card.Code + "', 0, NOW());")
 	if err != nil {
-		c.Status(http.StatusInternalServerError)
+		c.Status(http.StatusNotFound)
 		return
 	}
 	c.Status(http.StatusCreated)
@@ -201,12 +223,12 @@ func productGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 
 func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 	var product struct {
-		Card        string `json:"card"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Department  string `json:"department"`
-		Quantity    string `json:"quantity"`
-		Price       string `json:"price"`
+		Card        string `json:"card" binding:"required"`
+		Name        string `json:"name" binding:"required"`
+		Description string `json:"description" binding:"required"`
+		Department  string `json:"department" binding:"required"`
+		Quantity    string `json:"quantity" binding:"required"`
+		Price       string `json:"price" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&product); err != nil {
 		c.Status(http.StatusBadRequest)

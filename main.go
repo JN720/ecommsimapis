@@ -67,6 +67,10 @@ func main() {
 	app.GET("/reviews/:id", func(c *gin.Context) { reviewGet(c, db, rdb) })
 	//make review
 	app.POST("/reviews", authMW, func(c *gin.Context) { reviewPost(c, db, rdb) })
+	//get purchase history
+	app.GET("/orders", authMW, func(c *gin.Context) { orderGet(c, db, rdb) })
+	//purchase
+	app.POST("/orders", authMW, func(c *gin.Context) { orderPost(c, db, rdb) })
 	//account creation
 	app.POST("/signup", func(c *gin.Context) { signup(c, fba) })
 	port := os.Getenv("PORT")
@@ -300,14 +304,13 @@ func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		Quantity    string `json:"quantity" binding:"required"`
 		Price       string `json:"price" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&product); err != nil {
-		c.Status(http.StatusBadRequest)
+	if err := c.BindJSON(&product); err != nil {
 		return
 	}
-
+	var cardId string
 	var code string
-	cardErr := db.QueryRow("SELECT code FROM Cards WHERE user_id = " +
-		id.(string) + " AND Card = " + product.Card).Scan(&code)
+	cardErr := db.QueryRow("SELECT id, code FROM Cards WHERE user_id = "+
+		id.(string)+" AND number = '"+product.Card+"';").Scan(&cardId, &code)
 
 	if cardErr != nil {
 		c.Status(http.StatusNotFound)
@@ -323,8 +326,8 @@ func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		return
 	}
 
-	_, err := db.Query("INSERT INTO Products(card_id, name, description, department, quantity, price, status, created) VALUES(" +
-		product.Card + ",'" + product.Name + "', '" + product.Description + "', '" + product.Department + "', " + product.Quantity + ", " + product.Price + ", 'A', NOW());")
+	_, err := db.Query("INSERT INTO Products(card_id, name, description, department, quantity, price, status, created) VALUES('" +
+		cardId + "','" + product.Name + "', '" + product.Description + "', '" + product.Department + "', " + product.Quantity + ", " + product.Price + ", 'A', NOW());")
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -395,6 +398,113 @@ func reviewPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		uid.(string) + ", '" + review.Text + "', " + review.Rating + ", " + review.Product + ", NOW());")
 	if err != nil {
 		c.Status(http.StatusNotFound)
+		return
+	}
+	c.Status(http.StatusCreated)
+}
+
+func orderGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	uid, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	var orders []struct {
+		Name      string `json:"name"`
+		Card      string `json:"card"`
+		Quantity  string `json:"quantity"`
+		Price     string `json:"price"`
+		Status    string `json:"status"`
+		Timestamp string `json:"timestamp"`
+	}
+
+	rows, err := db.Query("SELECT Products.name, Cards.number, Orders.quantity, Products.price, Orders.status, Orders.created" +
+		" FROM Users JOIN Cards ON Users.id = Cards.user_id JOIN Orders ON Cards.id = Orders.card_id JOIN Products ON " +
+		" Products.id = Orders.product_id WHERE Users.id = " + uid.(string) + ";")
+
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	for rows.Next() {
+		var order struct {
+			Name      string `json:"name"`
+			Card      string `json:"card"`
+			Quantity  string `json:"quantity"`
+			Price     string `json:"price"`
+			Status    string `json:"status"`
+			Timestamp string `json:"timestamp"`
+		}
+		if err := rows.Scan(&order.Name, &order.Card, &order.Quantity, &order.Price, &order.Status, &order.Timestamp); err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		orders = append(orders, order)
+	}
+	c.IndentedJSON(http.StatusOK, gin.H{"orders": orders})
+}
+
+func orderPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	id, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	var order struct {
+		Card     string `json:"card" binding:"required,len=12"`
+		Code     string `json:"code" binding:"required,len=4"`
+		Product  string `json:"product" binding:"required"`
+		Quantity string `json:"quantity" binding:"required,number"`
+	}
+	if err := c.BindJSON(&order); err != nil {
+		return
+	}
+	var cardId string
+	var card string
+	var code string
+	var balance string
+
+	cardErr := db.QueryRow("SELECT id, number, code, balance FROM Cards WHERE user_id = "+id.(string)+
+		" AND number = '"+order.Card+"';").Scan(&cardId, &card, &code, &balance)
+	if cardErr != nil {
+		c.Status(http.StatusNotFound)
+	}
+	if code != order.Code {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+	var productCard string
+	var qProd string
+	var price string
+	var status string
+	productErr := db.QueryRow("SELECT card_id, quantity, price, status FROM Products WHERE id = "+order.Product+";").Scan(&productCard, &qProd, &price, &status)
+	if productErr != nil || status != "A" {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	qOrder, qOrderErr := strconv.ParseInt(order.Quantity, 10, 16)
+	qProduct, qProductErr := strconv.ParseInt(qProd, 10, 16)
+	cardBalance, cardBalanceErr := strconv.ParseFloat(balance, 64)
+	pPrice, pPriceErr := strconv.ParseFloat(price, 64)
+	if qOrderErr != nil || qProductErr != nil || cardBalanceErr != nil || pPriceErr != nil || qProduct < qOrder {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	cost := float64(qOrder) * pPrice
+	if cardBalance < cost {
+		c.Status(http.StatusPaymentRequired)
+		return
+	}
+	_, err := db.Query("INSERT INTO Orders(card_id, product_id, quantity, status, created) VALUES(" +
+		cardId + ", " + order.Product + ", " + order.Quantity + ", 'A', NOW()); UPDATE Cards SET" +
+		" balance = balance - " + strconv.FormatFloat(cost, 'f', -1, 64) + " WHERE id = " + cardId + ";" +
+		" UPDATE Products SET quantity = quantity - " + order.Quantity + " WHERE id = " + order.Product + ";" +
+		" UPDATE Cards SET balance = balance + " + strconv.FormatFloat(cost, 'f', -1, 64) + " WHERE" +
+		" id = " + productCard + ";")
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
 		return
 	}
 	c.Status(http.StatusCreated)

@@ -25,7 +25,7 @@ func main() {
 	}
 	fba, err := fb.Auth(context.Background())
 	if err != nil {
-		//panic("firebase auth failed")
+		panic("firebase auth failed")
 	}
 	opt, err := redis.ParseURL(os.Getenv("REDIS_URL"))
 	if err != nil {
@@ -59,6 +59,10 @@ func main() {
 	app.GET("/products/:id", func(c *gin.Context) { productGet(c, db, rdb) })
 	//product creation
 	app.POST("/products", authMW, func(c *gin.Context) { productPost(c, db, rdb) })
+	//reviews for product
+	app.GET("/reviews/:id", func(c *gin.Context) { reviewGet(c, db, rdb) })
+	//make review
+	app.POST("/reviews", authMW, func(c *gin.Context) { reviewPost(c, db, rdb) })
 	//account creation
 	app.POST("/signup", func(c *gin.Context) { signup(c, fba) })
 	port := os.Getenv("PORT")
@@ -251,6 +255,69 @@ func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		product.Card + ",'" + product.Name + "', '" + product.Description + "', '" + product.Department + "', " + product.Quantity + ", " + product.Price + ", 'A', NOW());")
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
+		return
+	}
+	c.Status(http.StatusCreated)
+}
+
+func reviewGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	var reviews []struct {
+		Name      string `json:"name"`
+		Text      string `json:"text"`
+		Rating    string `json:"rating"`
+		Timestamp string `json:"timestamp"`
+	}
+
+	id, hasId := c.Params.Get("id")
+	if !hasId {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	rows, err := db.Query("SELECT Reviews.review AS text, Users.name AS name, Reviews.created AS timestamp," +
+		" Reviews.rating AS rating FROM Reviews JOIN Users ON Users.id = Reviews.user_id WHERE Reviews.product_id" +
+		" = " + id + " ORDER BY Reviews.created DESC;")
+
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	for rows.Next() {
+		var review struct {
+			Name      string `json:"name"`
+			Text      string `json:"text"`
+			Rating    string `json:"rating"`
+			Timestamp string `json:"timestamp"`
+		}
+		if err := rows.Scan(&review.Text, &review.Name, &review.Timestamp, &review.Rating); err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		reviews = append(reviews, review)
+	}
+	c.IndentedJSON(http.StatusOK, gin.H{"reviews": reviews})
+}
+
+func reviewPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	var review struct {
+		User    string `json:"user" binding:"required"`
+		Product string `json:"product" binding:"required"`
+		Text    string `json:"text" binding:"required"`
+		Rating  string `json:"rating" binding:"required,number"`
+	}
+	if err := c.BindJSON(&review); err != nil {
+		return
+	}
+
+	if rating, err := strconv.ParseInt(review.Rating, 10, 16); err != nil || rating > 5 || rating < 1 {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Query("INSERT INTO Reviews(user_id, review, rating, product_id, created) VALUES(" +
+		review.User + ", '" + review.Text + "', " + review.Rating + ", " + review.Product + ", NOW());")
+	if err != nil {
+		c.Status(http.StatusNotFound)
 		return
 	}
 	c.Status(http.StatusCreated)

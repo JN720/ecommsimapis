@@ -40,9 +40,13 @@ func main() {
 	app := gin.Default()
 
 	authMW := func(c *gin.Context) {
-		//c.Next()
-		//return
-		authenticate(c, fba)
+		//DEVELOPMENT_ONLY_AUTHENTICATION_TEST(c, false)
+		authenticate(c, fba, false)
+	}
+
+	optAuthMW := func(c *gin.Context) {
+		//DEVELOPMENT_ONLY_AUTHENTICATION_TEST(c, true)
+		authenticate(c, fba, true)
 	}
 
 	//api status
@@ -50,13 +54,13 @@ func main() {
 	//public user info
 	app.GET("/users/:id", func(c *gin.Context) { userGet(c, db, rdb) })
 	//user profile
-	app.PATCH("/users/:id", authMW, func(c *gin.Context) { userPatch(c, db, rdb) })
+	app.PATCH("/users", authMW, func(c *gin.Context) { userPatch(c, db, rdb) })
 	//user cards
-	app.GET("/cards/:id", authMW, func(c *gin.Context) { cardGet(c, db, rdb) })
+	app.GET("/cards", authMW, func(c *gin.Context) { cardGet(c, db, rdb) })
 	//new card: should have auto generated card id's
 	app.POST("/cards", authMW, func(c *gin.Context) { cardPost(c, db, rdb) })
 	//product info: should have image retrieval
-	app.GET("/products/:id", func(c *gin.Context) { productGet(c, db, rdb) })
+	app.GET("/products/:id", optAuthMW, func(c *gin.Context) { productGet(c, db, rdb) })
 	//product creation
 	app.POST("/products", authMW, func(c *gin.Context) { productPost(c, db, rdb) })
 	//reviews for product
@@ -71,15 +75,40 @@ func main() {
 	}
 }
 
-func authenticate(c *gin.Context, fba *auth.Client) {
+func authenticate(c *gin.Context, fba *auth.Client, opt bool) {
 	idToken := c.GetHeader("Authorization")
 	token, err := fba.VerifyIDToken(context.Background(), idToken)
 	if err != nil {
+		if opt {
+			c.Next()
+			return
+		}
 		c.Status(http.StatusUnauthorized)
 		c.Abort()
 		return
 	}
-	c.Set("token", token)
+	c.Set("UID", token.UID)
+	c.Next()
+}
+
+func DEVELOPMENT_ONLY_AUTHENTICATION_TEST(c *gin.Context, opt bool) {
+	idToken := c.GetHeader("Authorization")
+	var token auth.Token
+	switch idToken {
+	case "token1":
+		token.UID = "1"
+	case "token2":
+		token.UID = "2"
+	default:
+		if opt {
+			c.Next()
+			return
+		}
+		c.Status(http.StatusUnauthorized)
+		c.Abort()
+		return
+	}
+	c.Set("uid", token.UID)
 	c.Next()
 }
 
@@ -139,19 +168,21 @@ func userGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 }
 
 func userPatch(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	uid, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
 	var user struct {
 		Name    string `json:"name" binding:"required"`
 		Address string `json:"address" binding:"required"`
 	}
-	id, hasId := c.Params.Get("id")
-	if !hasId {
-		c.Status(http.StatusBadRequest)
-		return
-	}
+
 	if err := c.BindJSON(&user); err != nil {
 		return
 	}
-	if _, err := db.Query("UPDATE Users SET name = '" + user.Name + "', address = '" + user.Address + "' WHERE id = " + id + ";"); err != nil {
+	if _, err := db.Query("UPDATE Users SET name = '" + user.Name + "', address = '" + user.Address + "' WHERE id = " + uid.(string) + ";"); err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -159,19 +190,19 @@ func userPatch(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 }
 
 func cardGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	uid, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
 	var cards []struct {
 		Number  string `json:"number"`
 		Balance string `json:"balance"`
 	}
 
-	id, hasId := c.Params.Get("id")
-	if !hasId {
-		c.Status(http.StatusBadRequest)
-		return
-	}
-
 	rows, err := db.Query("SELECT Cards.number AS number, Cards.balance AS balance FROM Users JOIN Cards" +
-		" ON Users.id = Cards.user_id WHERE Users.id = " + id + " GROUP BY Cards.number, Cards.balance;")
+		" ON Users.id = Cards.user_id WHERE Users.id = " + uid.(string) + " GROUP BY Cards.number, Cards.balance;")
 
 	if err != nil {
 		c.Status(http.StatusNotFound)
@@ -192,8 +223,13 @@ func cardGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 }
 
 func cardPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	uid, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
 	var card struct {
-		User   string `json:"user" binding:"required"`
 		Number string `json:"number" binding:"required,len=12"`
 		Code   string `json:"code" binding:"required,len=4"`
 	}
@@ -202,7 +238,7 @@ func cardPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 	}
 
 	_, err := db.Query("INSERT INTO Cards(user_id, number, code, balance, created) VALUES(" +
-		card.User + ",'" + card.Number + "', '" + card.Code + "', 0, NOW());")
+		uid.(string) + ",'" + card.Number + "', '" + card.Code + "', 0, NOW());")
 	if err != nil {
 		c.Status(http.StatusNotFound)
 		return
@@ -223,18 +259,41 @@ func productGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	err := db.QueryRow("SELECT name, description, department, quantity, price FROM Products WHERE id = "+id+
-		";").Scan(&product.Name, &product.Description, &product.Department, &product.Quantity, &product.Price)
+	var cardId string
+	err := db.QueryRow("SELECT card_id, name, description, department, quantity, price FROM Products WHERE id = "+id+
+		";").Scan(&cardId, &product.Name, &product.Description, &product.Department, &product.Quantity, &product.Price)
 	if err != nil {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	c.IndentedJSON(http.StatusOK, gin.H{"product": product})
+	_, exists := c.Get("uid")
+	if !exists {
+		c.IndentedJSON(http.StatusOK, gin.H{"product": product})
+		return
+	}
+	var seller struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	}
+	err = db.QueryRow("SELECT Users.name AS name, Users.email AS email FROM Users JOIN Cards"+
+		" ON Users.id = Cards.user_id WHERE Cards.id ="+cardId+"").Scan(&seller.Name, &seller.Email)
+	if err != nil {
+		c.IndentedJSON(http.StatusOK, gin.H{"product": product})
+		return
+	}
+	c.IndentedJSON(http.StatusOK, gin.H{"product": product, "seller": seller})
 }
 
 func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	id, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
 	var product struct {
-		Card        string `json:"card" binding:"required"`
+		Card        string `json:"card" binding:"required,len=12"`
+		Code        string `json:"code" binding:"required,len=4"`
 		Name        string `json:"name" binding:"required"`
 		Description string `json:"description" binding:"required"`
 		Department  string `json:"department" binding:"required"`
@@ -245,12 +304,25 @@ func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	quantity, err1 := strconv.ParseInt(product.Quantity, 10, 16)
-	id, err2 := strconv.ParseInt(product.Card, 10, 32)
-	if err1 != nil || err2 != nil || quantity < 1 || id < 1 {
+
+	var code string
+	cardErr := db.QueryRow("SELECT code FROM Cards WHERE user_id = " +
+		id.(string) + " AND Card = " + product.Card).Scan(&code)
+
+	if cardErr != nil {
+		c.Status(http.StatusNotFound)
+	}
+	if code != product.Code {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	quantity, qErr := strconv.ParseInt(product.Quantity, 10, 16)
+	if qErr != nil || quantity < 1 {
 		c.Status(http.StatusBadRequest)
 		return
 	}
+
 	_, err := db.Query("INSERT INTO Products(card_id, name, description, department, quantity, price, status, created) VALUES(" +
 		product.Card + ",'" + product.Name + "', '" + product.Description + "', '" + product.Department + "', " + product.Quantity + ", " + product.Price + ", 'A', NOW());")
 	if err != nil {
@@ -299,8 +371,13 @@ func reviewGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 }
 
 func reviewPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	uid, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
 	var review struct {
-		User    string `json:"user" binding:"required"`
 		Product string `json:"product" binding:"required"`
 		Text    string `json:"text" binding:"required"`
 		Rating  string `json:"rating" binding:"required,number"`
@@ -315,7 +392,7 @@ func reviewPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 	}
 
 	_, err := db.Query("INSERT INTO Reviews(user_id, review, rating, product_id, created) VALUES(" +
-		review.User + ", '" + review.Text + "', " + review.Rating + ", " + review.Product + ", NOW());")
+		uid.(string) + ", '" + review.Text + "', " + review.Rating + ", " + review.Product + ", NOW());")
 	if err != nil {
 		c.Status(http.StatusNotFound)
 		return

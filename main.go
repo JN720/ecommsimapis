@@ -63,6 +63,12 @@ func main() {
 	app.GET("/products/:id", optAuthMW, func(c *gin.Context) { productGet(c, db, rdb) })
 	//product creation
 	app.POST("/products", authMW, func(c *gin.Context) { productPost(c, db, rdb) })
+	//change product's visibility
+	app.PUT("/products/:id", authMW, func(c *gin.Context) { productPut(c, db, rdb) })
+	//change product's stock
+	app.PATCH("/products/:id", authMW, func(c *gin.Context) { productPatch(c, db, rdb) })
+	//product deletion (changes the status in the database)
+	app.DELETE("/products/:id", authMW, func(c *gin.Context) { productDelete(c, db, rdb) })
 	//reviews for product
 	app.GET("/reviews/:id", func(c *gin.Context) { reviewGet(c, db, rdb) })
 	//make review
@@ -266,9 +272,10 @@ func productGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		return
 	}
 	var cardId string
-	err := db.QueryRow("SELECT card_id, name, description, department, quantity, price FROM Products WHERE id = "+id+
-		";").Scan(&cardId, &product.Name, &product.Description, &product.Department, &product.Quantity, &product.Price)
-	if err != nil {
+	var status string
+	err := db.QueryRow("SELECT card_id, name, description, department, quantity, price, status FROM Products WHERE id = "+id+
+		";").Scan(&cardId, &product.Name, &product.Description, &product.Department, &product.Quantity, &product.Price, &status)
+	if err != nil || status != "A" {
 		c.Status(http.StatusNotFound)
 		return
 	}
@@ -335,6 +342,129 @@ func productPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		return
 	}
 	c.Status(http.StatusCreated)
+}
+
+func productPut(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	id, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	productId, exists := c.Params.Get("id")
+	if !exists {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	var product struct {
+		Code string `json:"code" binding:"required,len=4"`
+	}
+	if err := c.BindJSON(&product); err != nil {
+		return
+	}
+	var code string
+	err := db.QueryRow("SELECT Cards.code FROM Products JOIN Cards ON Products.card_id = Cards.id" +
+		" WHERE Cards.user_id = " + id.(string) + " AND Products.id = " + productId + ";").Scan(&code)
+
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if code != product.Code {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	_, err = db.Query("UPDATE Products SET status = 'A' WHERE id = " + productId + ";")
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	c.Status(http.StatusOK)
+}
+
+func productPatch(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	id, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	productId, exists := c.Params.Get("id")
+	if !exists {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	var product struct {
+		Code     string `json:"code" binding:"required,len=4"`
+		Quantity string `json:"quantity" binding:"required,number"`
+	}
+	if err := c.BindJSON(&product); err != nil {
+		return
+	}
+	var code string
+	err := db.QueryRow("SELECT Cards.code FROM Products JOIN Cards ON Products.card_id = Cards.id" +
+		" WHERE Cards.user_id = " + id.(string) + " AND Products.id = " + productId + ";").Scan(&code)
+
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if code != product.Code {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	if quantity, err := strconv.ParseInt(product.Quantity, 10, 16); err != nil || quantity < 0 {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	_, err = db.Query("UPDATE Products SET quantity = " + product.Quantity + " WHERE id = " + productId + ";")
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	c.Status(http.StatusOK)
+}
+
+func productDelete(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	id, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	productId, exists := c.Params.Get("id")
+	if !exists {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	var product struct {
+		Code string `json:"code" binding:"required,len=4"`
+	}
+	if err := c.BindJSON(&product); err != nil {
+		return
+	}
+	var code string
+	err := db.QueryRow("SELECT Cards.code FROM Products JOIN Cards ON Products.card_id = Cards.id" +
+		" WHERE Cards.user_id = " + id.(string) + " AND Products.id = " + productId + ";").Scan(&code)
+
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if code != product.Code {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	_, err = db.Query("UPDATE Products SET status = 'R' WHERE id = " + productId + ";")
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	c.Status(http.StatusOK)
 }
 
 func reviewGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {

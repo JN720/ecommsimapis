@@ -71,6 +71,8 @@ func main() {
 	app.GET("/orders", authMW, func(c *gin.Context) { orderGet(c, db, rdb) })
 	//purchase
 	app.POST("/orders", authMW, func(c *gin.Context) { orderPost(c, db, rdb) })
+	//view orders to your products
+	app.GET("/orders/queue", authMW, func(c *gin.Context) { orderQueueGet(c, db, rdb) })
 	//account creation
 	app.POST("/signup", func(c *gin.Context) { signup(c, fba) })
 	port := os.Getenv("PORT")
@@ -437,6 +439,50 @@ func orderGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 			Timestamp string `json:"timestamp"`
 		}
 		if err := rows.Scan(&order.Name, &order.Card, &order.Quantity, &order.Price, &order.Status, &order.Timestamp); err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		orders = append(orders, order)
+	}
+	c.IndentedJSON(http.StatusOK, gin.H{"orders": orders})
+}
+
+func orderQueueGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	uid, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	var orders []struct {
+		Buyer     string `json:"buyer"`
+		Name      string `json:"name"`
+		Card      string `json:"card"`
+		Quantity  string `json:"quantity"`
+		Price     string `json:"price"`
+		Status    string `json:"status"`
+		Timestamp string `json:"timestamp"`
+	}
+
+	rows, err := db.Query("SELECT u1.name, Products.name, c0.number, Orders.quantity, Products.price, Orders.status, Orders.created" +
+		" FROM Users AS u0 JOIN Cards AS c0 ON u0.id = c0.user_id JOIN Products ON c0.id = Products.card_id JOIN Orders ON Products.id" +
+		" = Orders.product_id JOIN Cards AS c1 ON Orders.card_id = c1.id JOIN Users AS u1 ON c1.user_id = u1.id WHERE u0.id = " + uid.(string) + ";")
+
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	for rows.Next() {
+		var order struct {
+			Buyer     string `json:"buyer"`
+			Name      string `json:"name"`
+			Card      string `json:"card"`
+			Quantity  string `json:"quantity"`
+			Price     string `json:"price"`
+			Status    string `json:"status"`
+			Timestamp string `json:"timestamp"`
+		}
+		if err := rows.Scan(&order.Buyer, &order.Name, &order.Card, &order.Quantity, &order.Price, &order.Status, &order.Timestamp); err != nil {
 			c.Status(http.StatusInternalServerError)
 			return
 		}

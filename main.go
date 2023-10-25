@@ -90,7 +90,7 @@ func main() {
 	//view orders to your products
 	app.GET("/orders/queue", authMW, func(c *gin.Context) { orderQueueGet(c, db, rdb) })
 	//account creation
-	app.POST("/signup", func(c *gin.Context) { signup(c, fba) })
+	app.POST("/signup", func(c *gin.Context) { signup(c, fba, db, rdb) })
 	port := os.Getenv("PORT")
 	if err := app.Run("localhost:" + port); err != nil {
 		app.Run("localhost:8000")
@@ -162,7 +162,7 @@ func checkStatus(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 	c.Next()
 }
 
-func signup(c *gin.Context, fba *auth.Client) {
+func signup(c *gin.Context, fba *auth.Client, db *sql.DB, rdb *redis.Client) {
 	var credentials struct {
 		Email    string `json:"email" binding:"required,email"`
 		Password string `json:"password" binding:"required"`
@@ -190,7 +190,20 @@ func signup(c *gin.Context, fba *auth.Client) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	c.IndentedJSON(http.StatusCreated, gin.H{"user": u})
+	var id string
+	err = db.QueryRow("INSERT INTO Users(email, name, status, created) VALUES('" +
+		credentials.Name + "', '" + credentials.Email + "', 'A', NOW()) RETURNING id;").Scan(&id)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	err = db.QueryRow("INSERT INTO Firebase(uid, id) VALUES('" +
+		u.UID + "', " + id + ") RETURNING id;").Scan(&id)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	c.Status(http.StatusCreated)
 }
 
 func indexGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {

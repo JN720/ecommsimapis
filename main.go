@@ -173,32 +173,36 @@ func signup(c *gin.Context, fba *auth.Client, db *sql.DB, rdb *redis.Client) {
 	if err := c.BindJSON(&credentials); err != nil {
 		return
 	}
+	var uid string
+	if user, err := fba.GetUserByEmail(context.Background(), credentials.Email); err != nil {
+		uid = user.UID
+	} else {
+		params := (&auth.UserToCreate{}).
+			Email(credentials.Email).
+			EmailVerified(false).
+			Password(credentials.Password).
+			DisplayName(credentials.Name).
+			Disabled(false)
 
-	params := (&auth.UserToCreate{}).
-		Email(credentials.Email).
-		EmailVerified(false).
-		Password(credentials.Password).
-		DisplayName(credentials.Name).
-		Disabled(false)
+		if credentials.Phone != "" {
+			params = params.PhoneNumber(credentials.Phone)
+		}
 
-	if credentials.Phone != "" {
-		params = params.PhoneNumber(credentials.Phone)
-	}
-
-	u, err := fba.CreateUser(context.Background(), params)
-	if err != nil {
-		c.Status(http.StatusInternalServerError)
-		return
+		user, err := fba.CreateUser(context.Background(), params)
+		if err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		uid = user.UID
 	}
 	var id string
-	err = db.QueryRow("INSERT INTO Users(email, name, status, created) VALUES('" +
+	err := db.QueryRow("INSERT INTO Users(email, name, status, created) VALUES('" +
 		credentials.Name + "', '" + credentials.Email + "', 'A', NOW()) RETURNING id;").Scan(&id)
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	err = db.QueryRow("INSERT INTO Firebase(uid, id) VALUES('" +
-		u.UID + "', " + id + ") RETURNING id;").Scan(&id)
+	_, err = db.Query("INSERT INTO Firebase(uid, id) VALUES('" + uid + "', " + id + ");")
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return

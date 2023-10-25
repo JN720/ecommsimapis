@@ -49,12 +49,18 @@ func main() {
 		authenticate(c, fba, true)
 	}
 
+	statusMW := func(c *gin.Context) {
+		status(c, db)
+	}
+
 	//api status
 	app.GET("/", func(c *gin.Context) { indexGet(c, db, rdb) })
 	//public user info
 	app.GET("/users/:id", func(c *gin.Context) { userGet(c, db, rdb) })
 	//user profile
 	app.PATCH("/users", authMW, func(c *gin.Context) { userPatch(c, db, rdb) })
+	//ban user
+	app.DELETE("/users/:id", authMW, statusMW, func(c *gin.Context) { userDelete(c, db, rdb) })
 	//user cards
 	app.GET("/cards", authMW, func(c *gin.Context) { cardGet(c, db, rdb) })
 	//new card: should have auto generated card id's
@@ -122,6 +128,24 @@ func DEVELOPMENT_ONLY_AUTHENTICATION_TEST(c *gin.Context, opt bool) {
 	}
 	c.Set("uid", token.UID)
 	c.Next()
+}
+
+func status(c *gin.Context, db *sql.DB) {
+	id, exists := c.Get("uid")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		c.Abort()
+		return
+	}
+	var status string
+	if err := db.QueryRow("SELECT status FROM Users WHERE id = " + id.(string) + ";").Scan(&status); err != nil {
+		if status == "B" {
+			c.Status(http.StatusUnauthorized)
+			c.Abort()
+			return
+		}
+		c.Set("status", status)
+	}
 }
 
 func signup(c *gin.Context, fba *auth.Client) {
@@ -195,6 +219,26 @@ func userPatch(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		return
 	}
 	if _, err := db.Query("UPDATE Users SET name = '" + user.Name + "', address = '" + user.Address + "' WHERE id = " + uid.(string) + ";"); err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	c.Status(http.StatusOK)
+}
+
+func userDelete(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	status, exists := c.Get("status")
+	if !exists || status != "M" {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	id, exists := c.Params.Get("id")
+	if !exists {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	if _, err := db.Query("UPDATE Users SET status = 'B' WHERE id = " + id + ";"); err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
 	}

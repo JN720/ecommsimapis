@@ -69,6 +69,8 @@ func main() {
 	app.POST("/cards", authMW, func(c *gin.Context) { cardPost(c, db, rdb) })
 	//product info: should have image retrieval
 	app.GET("/products/:id", optAuthMW, func(c *gin.Context) { productGet(c, db, rdb) })
+	//manual search
+	app.GET("/products", optAuthMW, func(c *gin.Context) { productSearch(c, db, rdb) })
 	//product creation
 	app.POST("/products", authMW, func(c *gin.Context) { productPost(c, db, rdb) })
 	//change product's visibility
@@ -334,6 +336,54 @@ func cardPost(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		return
 	}
 	c.Status(http.StatusCreated)
+}
+
+func productSearch(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	search := ""
+	sort := c.Query("sort")
+	if sort == "" {
+		sort = "created"
+	}
+	sortType := " DESC"
+	if c.Query("sortType") == "1" {
+		sortType = " ASC"
+	}
+	for _, term := range [...]string{"name", "description", "department"} {
+		value := c.Query(term)
+		if value != "" {
+			search += " AND " + term + " LIKE '%" + value + "%'"
+		}
+	}
+
+	var products []struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Department  string `json:"department"`
+		Quantity    string `json:"quantity"`
+		Price       string `json:"price"`
+	}
+
+	rows, err := db.Query("SELECT name, description, department, quantity, price FROM Products" +
+		" WHERE status = 'A'" + search + " ORDER BY " + sort + sortType + " LIMIT 50;")
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	for rows.Next() {
+		var product struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Department  string `json:"department"`
+			Quantity    string `json:"quantity"`
+			Price       string `json:"price"`
+		}
+		if err := rows.Scan(&product.Name, &product.Description, &product.Department, &product.Quantity, &product.Price); err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		products = append(products, product)
+	}
+	c.IndentedJSON(http.StatusOK, gin.H{"products": products})
 }
 
 func productGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {

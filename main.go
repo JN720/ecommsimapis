@@ -50,13 +50,15 @@ func main() {
 	}
 
 	statusMW := func(c *gin.Context) {
-		status(c, db)
+		checkStatus(c, db, rdb)
 	}
 
 	//api status
 	app.GET("/", func(c *gin.Context) { indexGet(c, db, rdb) })
 	//public user info
 	app.GET("/users/:id", func(c *gin.Context) { userGet(c, db, rdb) })
+	//unban user
+	app.PUT("/users/:id", authMW, statusMW, func(c *gin.Context) { userPut(c, db, rdb) })
 	//user profile
 	app.PATCH("/users", authMW, func(c *gin.Context) { userPatch(c, db, rdb) })
 	//ban user
@@ -117,6 +119,8 @@ func DEVELOPMENT_ONLY_AUTHENTICATION_TEST(c *gin.Context, opt bool) {
 		token.UID = "1"
 	case "token2":
 		token.UID = "2"
+	case "modtoken":
+		token.UID = "3"
 	default:
 		if opt {
 			c.Next()
@@ -130,7 +134,7 @@ func DEVELOPMENT_ONLY_AUTHENTICATION_TEST(c *gin.Context, opt bool) {
 	c.Next()
 }
 
-func status(c *gin.Context, db *sql.DB) {
+func checkStatus(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 	id, exists := c.Get("uid")
 	if !exists {
 		c.Status(http.StatusUnauthorized)
@@ -138,14 +142,22 @@ func status(c *gin.Context, db *sql.DB) {
 		return
 	}
 	var status string
-	if err := db.QueryRow("SELECT status FROM Users WHERE id = " + id.(string) + ";").Scan(&status); err != nil {
-		if status == "B" {
-			c.Status(http.StatusUnauthorized)
-			c.Abort()
-			return
-		}
+	if status, err := rdb.HGet(context.Background(), id.(string), "status").Result(); err == nil {
 		c.Set("status", status)
+	} else if err := db.QueryRow("SELECT status FROM Users WHERE id = " + id.(string) + ";").Scan(&status); err == nil {
+		c.Set("status", status)
+		rdb.HSet(context.Background(), id.(string), map[string]string{"status": status})
+	} else {
+		c.Status(http.StatusInternalServerError)
+		c.Abort()
+		return
 	}
+	if status == "B" {
+		c.Status(http.StatusUnauthorized)
+		c.Abort()
+		return
+	}
+	c.Next()
 }
 
 func signup(c *gin.Context, fba *auth.Client) {
@@ -203,6 +215,27 @@ func userGet(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 	c.IndentedJSON(http.StatusOK, user)
 }
 
+func userPut(c *gin.Context, db *sql.DB, rdb *redis.Client) {
+	status, exists := c.Get("status")
+	if !exists || status != "M" {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	id, exists := c.Params.Get("id")
+	if !exists {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	if _, err := db.Query("UPDATE Users SET status = 'A' WHERE id = " + id + ";"); err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	rdb.HSet(context.Background(), id, map[string]string{"status": "A"})
+	c.Status(http.StatusOK)
+}
+
 func userPatch(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 	uid, exists := c.Get("uid")
 	if !exists {
@@ -242,6 +275,7 @@ func userDelete(c *gin.Context, db *sql.DB, rdb *redis.Client) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
+	rdb.HSet(context.Background(), id, map[string]string{"status": "B"})
 	c.Status(http.StatusOK)
 }
 

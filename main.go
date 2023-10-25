@@ -41,12 +41,12 @@ func main() {
 
 	authMW := func(c *gin.Context) {
 		//DEVELOPMENT_ONLY_AUTHENTICATION_TEST(c, false)
-		authenticate(c, fba, false)
+		authenticate(c, fba, false, db, rdb)
 	}
 
 	optAuthMW := func(c *gin.Context) {
 		//DEVELOPMENT_ONLY_AUTHENTICATION_TEST(c, true)
-		authenticate(c, fba, true)
+		authenticate(c, fba, true, db, rdb)
 	}
 
 	statusMW := func(c *gin.Context) {
@@ -97,7 +97,7 @@ func main() {
 	}
 }
 
-func authenticate(c *gin.Context, fba *auth.Client, opt bool) {
+func authenticate(c *gin.Context, fba *auth.Client, opt bool, db *sql.DB, rdb *redis.Client) {
 	idToken := c.GetHeader("Authorization")
 	token, err := fba.VerifyIDToken(context.Background(), idToken)
 	if err != nil {
@@ -109,7 +109,17 @@ func authenticate(c *gin.Context, fba *auth.Client, opt bool) {
 		c.Abort()
 		return
 	}
-	c.Set("UID", token.UID)
+	if id, err := rdb.Get(context.Background(), token.UID).Result(); err == nil {
+		c.Set("UID", id)
+	} else if err := db.QueryRow("SELECT id FROM Firebase WHERE uid = '" + token.UID + "';").Scan(&id); err == nil {
+		c.Set("UID", id)
+		rdb.Set(context.Background(), token.UID, id, 0)
+	} else {
+		c.Status(http.StatusInternalServerError)
+		c.Abort()
+		return
+	}
+
 	c.Next()
 }
 

@@ -13,13 +13,16 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/api/option"
 )
 
 func main() {
 	if err := godotenv.Load(".env"); err != nil {
 		panic("environmental variable file not found")
 	}
-	fb, err := firebase.NewApp(context.Background(), nil)
+	options := option.WithCredentialsFile("serviceAccountKey.json")
+
+	fb, err := firebase.NewApp(context.Background(), nil, options)
 	if err != nil {
 		panic("firebase connection failed")
 	}
@@ -184,8 +187,8 @@ func signup(c *gin.Context, fba *auth.Client, db *sql.DB, rdb *redis.Client) {
 		return
 	}
 	var uid string
-	if user, err := fba.GetUserByEmail(context.Background(), credentials.Email); err != nil {
-		uid = user.UID
+	if user, err := fba.GetUserByEmail(context.Background(), credentials.Email); err == nil && user != nil && user.UserInfo != nil {
+		uid = user.UserInfo.UID
 	} else {
 		params := (&auth.UserToCreate{}).
 			Email(credentials.Email).
@@ -193,11 +196,9 @@ func signup(c *gin.Context, fba *auth.Client, db *sql.DB, rdb *redis.Client) {
 			Password(credentials.Password).
 			DisplayName(credentials.Name).
 			Disabled(false)
-
 		if credentials.Phone != "" {
 			params = params.PhoneNumber(credentials.Phone)
 		}
-
 		user, err := fba.CreateUser(context.Background(), params)
 		if err != nil {
 			c.Status(http.StatusInternalServerError)
@@ -206,7 +207,7 @@ func signup(c *gin.Context, fba *auth.Client, db *sql.DB, rdb *redis.Client) {
 		uid = user.UID
 	}
 	var id string
-	err := db.QueryRow("INSERT INTO Users(email, name, status, created) VALUES('" +
+	err := db.QueryRow("INSERT INTO Users(name, email, status, created) VALUES('" +
 		credentials.Name + "', '" + credentials.Email + "', 'A', NOW()) RETURNING id;").Scan(&id)
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
